@@ -23,6 +23,8 @@ const DEFAULT_STOREFRONTS = [
   'pl',
   'fr',
   'it',
+  'es',
+  'nl',
 ];
 
 function parseStorefrontCsv(raw) {
@@ -50,7 +52,7 @@ function resolveCockpitDashboardBase() {
       /* fallthrough */
     }
   }
-  return 'https://sellerportal.kaufland.de/dashboard';
+  return 'https://sellerportal.kaufland.de/dashboard/global';
 }
 
 export const config = {
@@ -59,9 +61,9 @@ export const config = {
   workerSecret: process.env.WORKER_SECRET ?? '',
   portalEntryUrl:
     process.env.PORTAL_ENTRY_URL ?? 'https://sellerportal.kaufland.de',
-  /** Např. `https://sellerportal.kaufland.de/dashboard` — storefront se doplňuje vždy v query */
+  /** Např. `https://sellerportal.kaufland.de/dashboard/global` */
   cockpitDashboardBaseUrl: resolveCockpitDashboardBase(),
-  /** Pořadí načtení KPI (přímé `?storefront=` je spolehlivější než měnit roletku) */
+  /** Filtr storefrontů z global tabulky (Laravel settings / COCKPIT_STOREFRONTS) */
   cockpitStorefronts: parseStorefrontCsv(process.env.COCKPIT_STOREFRONTS),
   /** Playwright storageState (cookies + localStorage) — výchozí pi-worker/var/storage-state.json */
   storageStatePath:
@@ -78,12 +80,24 @@ export const config = {
 };
 
 /**
- * Plná URL dashboardu pro daný storefront (GET — bez roletky).
+ * Global Performance dashboard (jeden scrape pro všechny storefronty).
+ */
+export function globalPerformanceDashboardUrl() {
+  const base = config.cockpitDashboardBaseUrl.replace(/\/$/, '');
+  if (/\/dashboard\/global$/i.test(base)) {
+    return `${base}?tab=performance`;
+  }
+  if (/\/dashboard$/i.test(base)) {
+    return `${base}/global?tab=performance`;
+  }
+  return `${base}?tab=performance`;
+}
+
+/**
+ * @deprecated Preferuj {@link globalPerformanceDashboardUrl} — staré per-SF cockpit URL.
  * @param {string} storefront
  */
 export function cockpitDashboardUrlForStorefront(storefront) {
-  const sf = String(storefront ?? '')
-    .trim()
-    .toLowerCase();
-  return `${config.cockpitDashboardBaseUrl}?storefront=${encodeURIComponent(sf)}`;
+  void storefront;
+  return globalPerformanceDashboardUrl();
 }

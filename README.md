@@ -18,7 +18,7 @@ npm run job:login-totp
 
 `job:login` potřebuje `KAUFLAND_SELLER_EMAIL` a `KAUFLAND_SELLER_PASSWORD` v `.env`. Výstup: `reachedOtpStep: true` pokud se objeví OTP / 2FA obrazovka (bez vyplnění kódu).
 
-`job:login-totp` navíc `TOTP_SECRET`: po přihlášení projde storefronty z `COCKPIT_STOREFRONTS`, nebo — pokud je v `.env` **`SCRAPE_API_BASE`** + **`SCRAPE_CONTROL_HASH`** — z Laravel GET **`…/kaufland/scrape-settings`** (`kaufland_kpi_scrape_storefronts`). Při `kaufland_kpi_scrape_enabled` vypnutém job skončí s `skipped: true`. E-mail loginu může přijít z API (`kaufland_kpi_scrape_email_login`), heslo a TOTP zůstávají v `.env`. U každého storefrontu udělá **`page.goto`** na `COCKPIT_DASHBOARD_BASE?storefront=…`. Výstup v JSON: **`dashboard.storefronts[]`**, volitelně **`scrapeSettings`**; na konzoli přes **`printAllStorefrontKpis`**.
+`job:login-totp` navíc `TOTP_SECRET`: po přihlášení otevře **`/dashboard/global?tab=performance`**, projde taby **Performance / Sales / Product range**, vytáhne KPI z `.health-dashboard` a rozdělí je podle `storefront=` v odkazech buněk. Volitelně i globální **Total sales** (`section: Revenue`). Filtr: `COCKPIT_STOREFRONTS`, nebo Laravel GET **`…/kaufland/scrape-settings`** (`kaufland_kpi_scrape_storefronts`). Při `kaufland_kpi_scrape_enabled` vypnutém job skončí s `skipped: true`. E-mail loginu může přijít z API (`kaufland_kpi_scrape_email_login`), heslo a TOTP zůstávají v `.env`. Výstup: **`dashboard.storefronts[]`** (`section`/`label`/`value`/`status`), volitelně **`scrapeSettings`**.
 
 Login joby používají **`humanize`**: náhodný viewport, běžný Chrome User-Agent, `de-DE` / `Europe/Berlin`, pauzy mezi kroky a `pressSequentially` místo okamžitého `fill()`.
 

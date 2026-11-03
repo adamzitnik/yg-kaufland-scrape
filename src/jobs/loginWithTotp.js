@@ -116,6 +116,7 @@ async function runFullLoginAndDashboard(page, context, secret, runOpts) {
     dashboard: {
       ok: dashboard.ok,
       storefronts: dashboard.storefronts,
+      globalMetrics: dashboard.globalMetrics ?? [],
     },
   };
 }
@@ -188,6 +189,7 @@ export async function runLoginWithTotp() {
             const dashboard = await loadAllStorefrontKpis(
               page,
               storefrontCodes,
+              { skipGoto: true },
             );
             printAllStorefrontKpis(dashboard);
 
@@ -207,6 +209,7 @@ export async function runLoginWithTotp() {
                 dashboard: {
                   ok: dashboard.ok,
                   storefronts: dashboard.storefronts,
+                  globalMetrics: dashboard.globalMetrics ?? [],
                 },
                 ...(remote ? { scrapeSettings: remote } : {}),
               },
