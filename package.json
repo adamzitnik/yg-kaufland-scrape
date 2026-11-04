@@ -11,6 +11,7 @@
     "job:ping": "node src/cli.js ping",
     "job:login": "node src/cli.js login",
     "job:login-totp": "node src/cli.js login-totp",
+    "job:warehouse": "node src/cli.js warehouse",
     "postinstall": "playwright install chromium"
   },
   "dependencies": {

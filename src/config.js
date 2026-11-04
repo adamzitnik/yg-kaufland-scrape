@@ -77,6 +77,39 @@ export const config = {
   playwrightHeadless: !headed,
   /** ms mezi akcemi při ladění (0 = vypnuto) */
   playwrightSlowMo: slowMo,
+
+  /** YG-CRM Warehouse dashboard */
+  crmBaseUrl: (
+    process.env.CRM_BASE_URL?.trim() ||
+    'https://crmsystem20260328170814-bybzaucdewa0bte4.germanywestcentral-01.azurewebsites.net'
+  ).replace(/\/$/, ''),
+  crmWarehouseUrl: (() => {
+    const full = process.env.CRM_WAREHOUSE_URL?.trim();
+    if (full) {
+      return full;
+    }
+    const base = (
+      process.env.CRM_BASE_URL?.trim() ||
+      'https://crmsystem20260328170814-bybzaucdewa0bte4.germanywestcentral-01.azurewebsites.net'
+    ).replace(/\/$/, '');
+    return `${base}/Warehouse`;
+  })(),
+  crmEmail:
+    process.env.CRM_EMAIL?.trim() ||
+    process.env.YG_CRM_EMAIL?.trim() ||
+    '',
+  crmPassword:
+    process.env.CRM_PASSWORD || process.env.YG_CRM_PASSWORD || '',
+  crmStorageStatePath:
+    process.env.CRM_STORAGE_STATE?.trim() ||
+    path.join(__dirname, '..', 'var', 'crm-storage-state.json'),
+  warehouseScrapeEnabled: !envFalsey(
+    process.env.WAREHOUSE_SCRAPE_ENABLED ?? 'true',
+  ),
+  /** Po úspěšném (nebo skipped) Kaufland běhu spustit Warehouse */
+  warehouseScrapeAfterKaufland: !envFalsey(
+    process.env.WAREHOUSE_SCRAPE_AFTER_KAUFLAND ?? 'true',
+  ),
 };
 
 /**

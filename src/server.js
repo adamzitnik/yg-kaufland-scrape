@@ -3,6 +3,8 @@ import { config } from './config.js';
 import { runPingPortal } from './jobs/pingPortal.js';
 import { runLoginEmailPassword } from './jobs/loginEmailPassword.js';
 import { runLoginWithTotp } from './jobs/loginWithTotp.js';
+import { runWarehouseDashboard } from './jobs/warehouseDashboard.js';
+import { logError } from './lib/logger.js';
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -73,7 +75,29 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (job === 'loginWithTotp') {
-        const result = await runLoginWithTotp();
+        const kaufland = await runLoginWithTotp();
+        let warehouse = null;
+        if (
+          config.warehouseScrapeAfterKaufland &&
+          config.warehouseScrapeEnabled
+        ) {
+          try {
+            warehouse = await runWarehouseDashboard();
+          } catch (e) {
+            logError('warehouse after kaufland (http)', e);
+            warehouse = {
+              job: 'warehouseDashboard',
+              ok: false,
+              error: e instanceof Error ? e.message : String(e),
+            };
+          }
+        }
+        const result = warehouse ? { kaufland, warehouse } : kaufland;
+        json(res, 200, { ok: kaufland.ok !== false, result });
+        return;
+      }
+      if (job === 'warehouseDashboard' || job === 'warehouse') {
+        const result = await runWarehouseDashboard();
         json(res, 200, { ok: result.ok !== false, result });
         return;
       }

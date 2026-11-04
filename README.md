@@ -20,6 +20,8 @@ npm run job:login-totp
 
 `job:login-totp` navíc `TOTP_SECRET`: po přihlášení otevře **`/dashboard/global?tab=performance`**, projde taby **Performance / Sales / Product range**, vytáhne KPI z `.health-dashboard` a rozdělí je podle `storefront=` v odkazech buněk. Volitelně i globální **Total sales** (`section: Revenue`). Filtr: `COCKPIT_STOREFRONTS`, nebo Laravel GET **`…/kaufland/scrape-settings`** (`kaufland_kpi_scrape_storefronts`). Při `kaufland_kpi_scrape_enabled` vypnutém job skončí s `skipped: true`. E-mail loginu může přijít z API (`kaufland_kpi_scrape_email_login`), heslo a TOTP zůstávají v `.env`. Výstup: **`dashboard.storefronts[]`** (`section`/`label`/`value`/`status`), volitelně **`scrapeSettings`**.
 
+Po Kauflandu (výchozí) běží **`job:warehouse`** — YG-CRM `/Warehouse` (login `#Input_Email` / `#Input_Password`, KPI z `data-cell`, attention panel). Credentials: `CRM_EMAIL` / `CRM_PASSWORD`. Session: `var/crm-storage-state.json`. Ingest: `SCRAPE_API_BASE` + `/warehouse/scrape-ingest` (stejný `SCRAPE_INGEST_HASH`). Vypnutí: `WAREHOUSE_SCRAPE_ENABLED=false` nebo `WAREHOUSE_SCRAPE_AFTER_KAUFLAND=false`. Samostatně: `npm run job:warehouse`.
+
 Login joby používají **`humanize`**: náhodný viewport, běžný Chrome User-Agent, `de-DE` / `Europe/Berlin`, pauzy mezi kroky a `pressSequentially` místo okamžitého `fill()`.
 
 ### Uložená relace (bez opakovaného loginu)

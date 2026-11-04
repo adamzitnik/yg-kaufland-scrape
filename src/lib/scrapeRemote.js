@@ -10,6 +10,9 @@ const API_BASE = process.env.SCRAPE_API_BASE?.trim().replace(/\/$/, '');
 /** Pevné cesty (varianta B — `SCRAPE_API_BASE`). */
 const INGEST_PATH = '/kaufland/scrape-ingest';
 const SETTINGS_PATH = '/kaufland/scrape-settings';
+const WAREHOUSE_INGEST_PATH = '/warehouse/scrape-ingest';
+
+const WAREHOUSE_INGEST_URL_RAW = process.env.WAREHOUSE_SCRAPE_INGEST_URL?.trim();
 
 function joinBasePath(base, path) {
   const p = path.startsWith('/') ? path : `/${path}`;
@@ -179,6 +182,18 @@ export async function fetchScrapePlan() {
   return fetchScrapeSettings();
 }
 
+function resolveWarehouseIngestUrl() {
+  if (WAREHOUSE_INGEST_URL_RAW) {
+    return WAREHOUSE_INGEST_URL_RAW;
+  }
+  if (API_BASE) {
+    return joinBasePath(API_BASE, WAREHOUSE_INGEST_PATH);
+  }
+  return '';
+}
+
+const WAREHOUSE_INGEST_URL = resolveWarehouseIngestUrl();
+
 /**
  * POST výsledků po scrapu.
  * @param {unknown} payload
@@ -200,6 +215,34 @@ export async function postScrapeResult(payload) {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`SCRAPE_INGEST HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  return { ok: true, status: res.status };
+}
+
+/**
+ * POST Warehouse dashboard scrapu → `…/warehouse/scrape-ingest`.
+ * Stejný hash/hlavička jako Kaufland ingest (dokud Laravel nedá vlastní).
+ * @param {unknown} payload
+ */
+export async function postWarehouseScrapeResult(payload) {
+  if (!WAREHOUSE_INGEST_URL || !INGEST_HASH) {
+    return { skipped: true };
+  }
+  const body = JSON.stringify(payload);
+  const res = await fetch(WAREHOUSE_INGEST_URL, {
+    method: 'POST',
+    headers: {
+      [HDR_INGEST]: INGEST_HASH,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(
+      `WAREHOUSE_SCRAPE_INGEST HTTP ${res.status} ${text.slice(0, 200)}`,
+    );
   }
   return { ok: true, status: res.status };
 }
