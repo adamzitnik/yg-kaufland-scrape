@@ -292,71 +292,85 @@ async function enrichPerformanceDetailExacts(page, storefrontBlocks) {
     }
   })();
 
-  for (const block of storefrontBlocks) {
-    if (!block.ok || !Array.isArray(block.metrics)) {
-      continue;
-    }
+  /** Jedna detail page na celý enrichment — méně RAM na Pi než newPage per metrika. */
+  let detail = null;
 
-    for (const metric of block.metrics) {
-      const href = typeof metric.href === 'string' ? metric.href : '';
-      const rule = DETAIL_ENRICHMENTS.find(
-        (r) =>
-          r.labelRe.test(metric.label || '') || r.pathRe.test(href),
-      );
-
-      if (!rule) {
-        continue;
-      }
-      if (!href || /^n\/?a$/i.test(String(metric.value || ''))) {
-        continue;
-      }
-      if (!rule.pathRe.test(href)) {
+  try {
+    for (const block of storefrontBlocks) {
+      if (!block.ok || !Array.isArray(block.metrics)) {
         continue;
       }
 
-      let absoluteHref = href;
-      try {
-        absoluteHref = new URL(href, origin).href;
-      } catch {
-        /* keep relative */
-      }
-
-      const detail = await context.newPage();
-      try {
-        await detail.goto(absoluteHref, {
-          waitUntil: 'domcontentloaded',
-          timeout: DETAIL_WAIT_MS,
-        });
-        await humanPause(80, 200);
-        await dismissOnetrustIfPresent(detail);
-        await dismissSwiftyModalIfPresent(detail);
-
-        const exact = await rule.extract(detail);
-        if (exact) {
-          metric.bucket = metric.value;
-          metric.value = exact;
-          console.log(
-            `[dashboard] ${rule.key} exact storefront=${block.storefront}: ${exact} (bucket ${metric.bucket})`,
-          );
-        } else {
-          console.log(
-            `[dashboard] ${rule.key} exact storefront=${block.storefront}: not found, keep ${metric.value}`,
-          );
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.log(
-          `[dashboard] ${rule.key} exact storefront=${block.storefront}: fail — ${msg}`,
+      for (const metric of block.metrics) {
+        const href = typeof metric.href === 'string' ? metric.href : '';
+        const rule = DETAIL_ENRICHMENTS.find(
+          (r) =>
+            r.labelRe.test(metric.label || '') || r.pathRe.test(href),
         );
-      } finally {
-        await detail.close().catch(() => {});
+
+        if (!rule) {
+          continue;
+        }
+        if (!href || /^n\/?a$/i.test(String(metric.value || ''))) {
+          continue;
+        }
+        if (!rule.pathRe.test(href)) {
+          continue;
+        }
+
+        let absoluteHref = href;
+        try {
+          absoluteHref = new URL(href, origin).href;
+        } catch {
+          /* keep relative */
+        }
+
+        try {
+          if (!detail || detail.isClosed()) {
+            detail = await context.newPage();
+          }
+          await detail.goto(absoluteHref, {
+            waitUntil: 'domcontentloaded',
+            timeout: DETAIL_WAIT_MS,
+          });
+          await humanPause(80, 200);
+          await dismissOnetrustIfPresent(detail);
+          await dismissSwiftyModalIfPresent(detail);
+
+          const exact = await rule.extract(detail);
+          if (exact) {
+            metric.bucket = metric.value;
+            metric.value = exact;
+            console.log(
+              `[dashboard] ${rule.key} exact storefront=${block.storefront}: ${exact} (bucket ${metric.bucket})`,
+            );
+          } else {
+            console.log(
+              `[dashboard] ${rule.key} exact storefront=${block.storefront}: not found, keep ${metric.value}`,
+            );
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.log(
+            `[dashboard] ${rule.key} exact storefront=${block.storefront}: fail — ${msg}`,
+          );
+          // Po pádu Chromium zkus znovu otevřít detail page
+          if (detail && !detail.isClosed()) {
+            await detail.close().catch(() => {});
+          }
+          detail = null;
+        }
+
+        await humanPause(60, 150);
       }
 
-      await humanPause(60, 150);
+      for (const metric of block.metrics) {
+        delete metric.href;
+      }
     }
-
-    for (const metric of block.metrics) {
-      delete metric.href;
+  } finally {
+    if (detail && !detail.isClosed()) {
+      await detail.close().catch(() => {});
     }
   }
 }
@@ -425,8 +439,15 @@ async function extractGlobalTotalSales(page) {
   });
 }
 
+/** Po přepnutí tabu ověř, že header tabulky patří dané sekci (ne starý DOM). */
+const TAB_READY_LABEL = {
+  performance: /Seller-related cancellation rate|Ticket response rate|Tracking rate/i,
+  sales: /Total revenue|BuyBox share|Total orders/i,
+  assortment: /Total offers|Sellable offers|Out of stock|Missing product data/i,
+};
+
 /**
- * Klikne na BI tab podle data-tab-id a počká na tabulku.
+ * Klikne na BI tab podle data-tab-id a počká na tabulku dané sekce.
  * @param {import('playwright').Page} page
  * @param {string} tabId
  */
@@ -449,14 +470,35 @@ async function activateDashboardTab(page, tabId) {
     await humanPause(120, 280);
     await dismissSwiftyModalIfPresent(page);
     await tab.click({ timeout: 15_000 });
-    await humanPause(220, 450);
   }
 
   await page
     .locator('.health-dashboard__storefront')
     .first()
     .waitFor({ state: 'visible', timeout: KPI_WAIT_MS });
-  await humanPause(120, 280);
+
+  const labelRe = TAB_READY_LABEL[tabId];
+  if (labelRe) {
+    await page
+      .waitForFunction(
+        (reSource) => {
+          const re = new RegExp(reSource, 'i');
+          const labels = Array.from(
+            document.querySelectorAll('.health-dashboard__header-label'),
+          ).map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+          return labels.some((t) => re.test(t));
+        },
+        labelRe.source,
+        { timeout: KPI_WAIT_MS },
+      )
+      .catch(() => {
+        console.log(
+          `[dashboard] tab=${tabId}: header labels not ready in time, extracting anyway`,
+        );
+      });
+  }
+
+  await humanPause(180, 400);
 }
 
 /**
