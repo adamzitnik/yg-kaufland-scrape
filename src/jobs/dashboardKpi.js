@@ -4,6 +4,7 @@ import { dismissSwiftyModalIfPresent } from '../lib/swiftyModal.js';
 import { humanPause, jitterMouse } from '../lib/humanize.js';
 
 const KPI_WAIT_MS = 90_000;
+const DETAIL_WAIT_MS = 45_000;
 
 /** @type {ReadonlyArray<{ tabId: string, section: string }>} */
 const DASHBOARD_TABS = [
@@ -13,15 +14,26 @@ const DASHBOARD_TABS = [
 ];
 
 /**
+ * Detail enrichment rules: tabulka má bucket/zaokrouhlení, přesné % je na detail stránce.
+ * @typedef {{
+ *   key: string,
+ *   labelRe: RegExp,
+ *   pathRe: RegExp,
+ *   extract: (page: import('playwright').Page) => Promise<string | null>,
+ * }} DetailEnrichment
+ */
+
+/**
  * Extrahuje KPI z aktuálně viditelné health-dashboard tabulky.
  * Storefront bere z libovolného `a[href*="storefront="]` v řádku (sloupec i buňky).
+ * U klikacích buněk přidá `href` (pro enrichment detailů).
  * @param {import('playwright').Page} page
  * @param {string} section
  */
 async function extractHealthDashboardTable(page, section) {
   return page.evaluate((sectionName) => {
     /**
-     * @typedef {{ section: string, label: string, value: string, status: string | null }} Metric
+     * @typedef {{ section: string, label: string, value: string, status: string | null, href?: string }} Metric
      * @typedef {{ storefront: string, metrics: Metric[] }} Block
      */
     /** @type {Block[]} */
@@ -82,6 +94,16 @@ async function extractHealthDashboardTable(page, section) {
       return cell.textContent?.replace(/\s+/g, ' ').trim() ?? '';
     };
 
+    const hrefFromCell = (cell) => {
+      if (!cell) {
+        return '';
+      }
+      const a = cell.querySelector(
+        'a.numeric-cell__value[href], a.text-cell__value[href], a[href]',
+      );
+      return a?.getAttribute('href')?.trim() || '';
+    };
+
     const storefrontFromHref = (href) => {
       if (!href) {
         return '';
@@ -120,12 +142,18 @@ async function extractHealthDashboardTable(page, section) {
         if (!value) {
           return;
         }
-        metrics.push({
+        /** @type {Metric} */
+        const metric = {
           section: sectionName,
           label,
           value,
           status: statusFromCell(cell),
-        });
+        };
+        const href = hrefFromCell(cell);
+        if (href) {
+          metric.href = href;
+        }
+        metrics.push(metric);
       });
 
       if (metrics.length) {
@@ -135,6 +163,202 @@ async function extractHealthDashboardTable(page, section) {
 
     return blocks;
   }, section);
+}
+
+/**
+ * @param {import('playwright').Page} detailPage
+ * @param {string} waitSelector
+ */
+async function waitDetailReady(detailPage, waitSelector) {
+  await detailPage
+    .locator(waitSelector)
+    .first()
+    .waitFor({ state: 'visible', timeout: DETAIL_WAIT_MS })
+    .catch(() => {});
+  await humanPause(120, 280);
+}
+
+/**
+ * Z detailu bad-cancel-rates: „Calculated seller-related cancellation rate: X%“.
+ * @param {import('playwright').Page} detailPage
+ * @returns {Promise<string | null>}
+ */
+async function extractCalculatedCancellationRate(detailPage) {
+  await waitDetailReady(
+    detailPage,
+    '.bad-cancel-overview, .rd-kpi-statistics, .performance-page',
+  );
+
+  return detailPage.evaluate(() => {
+    const normalize = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const nodes = document.querySelectorAll(
+      '.bad-cancel-overview__fee-bucket strong, .bad-cancel-overview strong, strong',
+    );
+    for (const el of nodes) {
+      const text = normalize(el.textContent);
+      const m = text.match(
+        /Calculated\s+seller-related\s+cancellation\s+rate\s*:\s*([\d]+(?:[.,]\d+)?)\s*%/i,
+      );
+      if (m) {
+        return `${m[1].replace(',', '.')}%`;
+      }
+    }
+    const body = normalize(document.body?.innerText || '');
+    const fallback = body.match(
+      /Calculated\s+seller-related\s+cancellation\s+rate\s*:\s*([\d]+(?:[.,]\d+)?)\s*%/i,
+    );
+    return fallback ? `${fallback[1].replace(',', '.')}%` : null;
+  });
+}
+
+/**
+ * Z detailu delivery-rates: doughnut label „Delayed delivery rate“ → např. 5.3%.
+ * @param {import('playwright').Page} detailPage
+ * @returns {Promise<string | null>}
+ */
+async function extractDelayedDeliveryRate(detailPage) {
+  await waitDetailReady(
+    detailPage,
+    '.delivery-rates, .doughnut-chart, .performance-page',
+  );
+
+  return detailPage.evaluate(() => {
+    const normalize = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const pctFrom = (text) => {
+      const m = normalize(text).match(/([\d]+(?:[.,]\d+)?)\s*%/);
+      return m ? `${m[1].replace(',', '.')}%` : null;
+    };
+
+    const labels = document.querySelectorAll('.doughnut-chart__value-label');
+    for (const label of labels) {
+      const footnote = normalize(
+        label.querySelector('.doughnut-chart__value-label-footnote')
+          ?.textContent || '',
+      );
+      if (!/delayed\s+delivery\s+rate/i.test(footnote)) {
+        continue;
+      }
+      const exact = pctFrom(label.querySelector('h2')?.textContent || '');
+      if (exact) {
+        return exact;
+      }
+    }
+
+    const active = document.querySelector(
+      '.doughnut-chart__value-label--active h2',
+    );
+    const fromActive = pctFrom(active?.textContent || '');
+    if (fromActive) {
+      return fromActive;
+    }
+
+    const body = normalize(document.body?.innerText || '');
+    const m = body.match(
+      /([\d]+(?:[.,]\d+)?)\s*%\s*Delayed\s+delivery\s+rate/i,
+    );
+    return m ? `${m[1].replace(',', '.')}%` : null;
+  });
+}
+
+/** @type {ReadonlyArray<DetailEnrichment>} */
+const DETAIL_ENRICHMENTS = [
+  {
+    key: 'cancel',
+    labelRe: /seller-related\s+cancellation\s+rate/i,
+    pathRe: /\/performance\/delivery\/bad-cancel-rates/i,
+    extract: extractCalculatedCancellationRate,
+  },
+  {
+    key: 'delayed',
+    labelRe: /delayed\s+delivery\s+rate/i,
+    pathRe: /\/performance\/delivery\/delivery-rates/i,
+    extract: extractDelayedDeliveryRate,
+  },
+];
+
+/**
+ * Doplní přesné % z detail stránek (cancellation + delayed delivery).
+ * Původní hodnota z tabulky → `bucket`. N/A / bez href přeskočí. `href` smaže.
+ * @param {import('playwright').Page} page
+ * @param {{ storefront: string, ok: boolean, metrics: object[] }[]} storefrontBlocks
+ */
+async function enrichPerformanceDetailExacts(page, storefrontBlocks) {
+  const context = page.context();
+  const origin = (() => {
+    try {
+      return new URL(page.url()).origin;
+    } catch {
+      return 'https://sellerportal.kaufland.de';
+    }
+  })();
+
+  for (const block of storefrontBlocks) {
+    if (!block.ok || !Array.isArray(block.metrics)) {
+      continue;
+    }
+
+    for (const metric of block.metrics) {
+      const href = typeof metric.href === 'string' ? metric.href : '';
+      const rule = DETAIL_ENRICHMENTS.find(
+        (r) =>
+          r.labelRe.test(metric.label || '') || r.pathRe.test(href),
+      );
+
+      if (!rule) {
+        continue;
+      }
+      if (!href || /^n\/?a$/i.test(String(metric.value || ''))) {
+        continue;
+      }
+      if (!rule.pathRe.test(href)) {
+        continue;
+      }
+
+      let absoluteHref = href;
+      try {
+        absoluteHref = new URL(href, origin).href;
+      } catch {
+        /* keep relative */
+      }
+
+      const detail = await context.newPage();
+      try {
+        await detail.goto(absoluteHref, {
+          waitUntil: 'domcontentloaded',
+          timeout: DETAIL_WAIT_MS,
+        });
+        await humanPause(80, 200);
+        await dismissOnetrustIfPresent(detail);
+        await dismissSwiftyModalIfPresent(detail);
+
+        const exact = await rule.extract(detail);
+        if (exact) {
+          metric.bucket = metric.value;
+          metric.value = exact;
+          console.log(
+            `[dashboard] ${rule.key} exact storefront=${block.storefront}: ${exact} (bucket ${metric.bucket})`,
+          );
+        } else {
+          console.log(
+            `[dashboard] ${rule.key} exact storefront=${block.storefront}: not found, keep ${metric.value}`,
+          );
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.log(
+          `[dashboard] ${rule.key} exact storefront=${block.storefront}: fail — ${msg}`,
+        );
+      } finally {
+        await detail.close().catch(() => {});
+      }
+
+      await humanPause(60, 150);
+    }
+
+    for (const metric of block.metrics) {
+      delete metric.href;
+    }
+  }
 }
 
 /**
@@ -222,17 +446,17 @@ async function activateDashboardTab(page, tabId) {
     .catch(() => false);
 
   if (!alreadyActive) {
-    await humanPause(200, 500);
+    await humanPause(120, 280);
     await dismissSwiftyModalIfPresent(page);
     await tab.click({ timeout: 15_000 });
-    await humanPause(400, 900);
+    await humanPause(220, 450);
   }
 
   await page
     .locator('.health-dashboard__storefront')
     .first()
     .waitFor({ state: 'visible', timeout: KPI_WAIT_MS });
-  await humanPause(250, 600);
+  await humanPause(120, 280);
 }
 
 /**
@@ -261,18 +485,18 @@ function mergeBlocksIntoMap(map, blocks) {
 export async function loadDashboardAndExtractKpis(page, opts = {}) {
   try {
     if (!opts.skipGoto) {
-      await humanPause(350, 1100);
+      await humanPause(200, 500);
       await page.goto(globalPerformanceDashboardUrl(), {
         waitUntil: 'domcontentloaded',
         timeout: 60_000,
       });
-      await humanPause(450, 1300);
+      await humanPause(250, 600);
       await jitterMouse(page);
-      await humanPause(500, 1600);
+      await humanPause(280, 700);
       await dismissOnetrustIfPresent(page);
       await dismissSwiftyModalIfPresent(page);
     } else {
-      await humanPause(200, 600);
+      await humanPause(120, 300);
       await dismissOnetrustIfPresent(page);
       await dismissSwiftyModalIfPresent(page);
     }
@@ -286,7 +510,7 @@ export async function loadDashboardAndExtractKpis(page, opts = {}) {
       .waitFor({ state: 'visible', timeout: KPI_WAIT_MS });
 
     // Modal často naskočí až po vykreslení tabulky
-    await humanPause(300, 700);
+    await humanPause(150, 350);
     await dismissSwiftyModalIfPresent(page);
 
     /** @type {Map<string, { storefront: string, metrics: object[] }>} */
@@ -361,7 +585,7 @@ export async function loadAllStorefrontKpis(page, storefrontCodes, opts = {}) {
     extracted.metricsByStorefront.map((b) => [b.storefront, b]),
   );
 
-  /** @type {{ storefront: string, ok: boolean, url: string, metrics: unknown[], error?: string }[]} */
+  /** @type {{ storefront: string, ok: boolean, url: string, metrics: object[], error?: string }[]} */
   const blocks = [];
   for (const sf of wanted) {
     const found = bySf.get(sf);
@@ -383,6 +607,9 @@ export async function loadAllStorefrontKpis(page, storefrontCodes, opts = {}) {
       metrics: found.metrics,
     });
   }
+
+  // Přesné % z detailů (cancellation + delayed delivery); bucket = hodnota z tabulky
+  await enrichPerformanceDetailExacts(page, blocks);
 
   return {
     ok: blocks.every((b) => b.ok),
@@ -424,7 +651,8 @@ export function printAllStorefrontKpis(aggregated) {
     }
     for (const m of block.metrics) {
       const st = m.status ? ` — ${m.status}` : '';
-      console.log(`  [${m.section}] ${m.label}: ${m.value}${st}`);
+      const bucket = m.bucket ? ` (bucket ${m.bucket})` : '';
+      console.log(`  [${m.section}] ${m.label}: ${m.value}${bucket}${st}`);
     }
   }
   console.log('');
