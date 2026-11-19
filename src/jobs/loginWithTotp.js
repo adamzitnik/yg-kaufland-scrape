@@ -29,9 +29,45 @@ function normalizeTotpSecret(raw) {
     .replace(/\s+/g, '');
 }
 
+/**
+ * Laravel vyžaduje `metrics` u každého storefrontu (`required`).
+ * Prázdné `metrics: []` → HTTP 422. Pošli jen storefronty s daty.
+ * @param {any} result
+ */
+function sanitizeResultForIngest(result) {
+  if (!result?.dashboard || !Array.isArray(result.dashboard.storefronts)) {
+    return result;
+  }
+  const storefronts = result.dashboard.storefronts.filter(
+    (b) => Array.isArray(b?.metrics) && b.metrics.length > 0,
+  );
+  return {
+    ...result,
+    dashboard: {
+      ...result.dashboard,
+      storefronts,
+      ok: storefronts.length > 0 && result.dashboard.ok !== false,
+    },
+  };
+}
+
 async function attachIngestStatus(result) {
   try {
-    const ingest = await postScrapeResult(result);
+    const payload = sanitizeResultForIngest(result);
+    if (
+      payload?.dashboard &&
+      Array.isArray(payload.dashboard.storefronts) &&
+      payload.dashboard.storefronts.length === 0
+    ) {
+      console.log(
+        '[ingest] skip POST — žádné storefronty s metrics (Laravel by vrátil 422)',
+      );
+      return {
+        ...result,
+        ingest: { ok: false, skipped: true, reason: 'no_storefront_metrics' },
+      };
+    }
+    const ingest = await postScrapeResult(payload);
     return { ...result, ingest };
   } catch (e) {
     logError('postScrapeResult', e);

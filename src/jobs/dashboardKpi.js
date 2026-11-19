@@ -1,6 +1,7 @@
 import { config, globalPerformanceDashboardUrl } from '../config.js';
 import { dismissOnetrustIfPresent } from '../lib/onetrust.js';
 import { dismissSwiftyModalIfPresent } from '../lib/swiftyModal.js';
+import { ensurePortalEnglish } from '../lib/portalLocale.js';
 import { humanPause, jitterMouse } from '../lib/humanize.js';
 
 const KPI_WAIT_MS = 90_000;
@@ -194,19 +195,17 @@ async function extractCalculatedCancellationRate(detailPage) {
     const nodes = document.querySelectorAll(
       '.bad-cancel-overview__fee-bucket strong, .bad-cancel-overview strong, strong',
     );
+    const rateRe =
+      /(?:Calculated\s+seller-related\s+cancellation\s+rate|Berechnete\s+verkäuferbezogene\s+Stornierungsrate)\s*:\s*([\d]+(?:[.,]\d+)?)\s*%/i;
     for (const el of nodes) {
       const text = normalize(el.textContent);
-      const m = text.match(
-        /Calculated\s+seller-related\s+cancellation\s+rate\s*:\s*([\d]+(?:[.,]\d+)?)\s*%/i,
-      );
+      const m = text.match(rateRe);
       if (m) {
         return `${m[1].replace(',', '.')}%`;
       }
     }
     const body = normalize(document.body?.innerText || '');
-    const fallback = body.match(
-      /Calculated\s+seller-related\s+cancellation\s+rate\s*:\s*([\d]+(?:[.,]\d+)?)\s*%/i,
-    );
+    const fallback = body.match(rateRe);
     return fallback ? `${fallback[1].replace(',', '.')}%` : null;
   });
 }
@@ -235,7 +234,11 @@ async function extractDelayedDeliveryRate(detailPage) {
         label.querySelector('.doughnut-chart__value-label-footnote')
           ?.textContent || '',
       );
-      if (!/delayed\s+delivery\s+rate/i.test(footnote)) {
+      if (
+        !/delayed\s+delivery\s+rate|verspätete[rn]?\s+liefer|quote\s+verspäteter\s+lieferungen/i.test(
+          footnote,
+        )
+      ) {
         continue;
       }
       const exact = pctFrom(label.querySelector('h2')?.textContent || '');
@@ -254,7 +257,7 @@ async function extractDelayedDeliveryRate(detailPage) {
 
     const body = normalize(document.body?.innerText || '');
     const m = body.match(
-      /([\d]+(?:[.,]\d+)?)\s*%\s*Delayed\s+delivery\s+rate/i,
+      /([\d]+(?:[.,]\d+)?)\s*%\s*(?:Delayed\s+delivery\s+rate|Quote\s+verspäteter\s+Lieferungen|Verspätete\s+Lieferrate)/i,
     );
     return m ? `${m[1].replace(',', '.')}%` : null;
   });
@@ -264,13 +267,15 @@ async function extractDelayedDeliveryRate(detailPage) {
 const DETAIL_ENRICHMENTS = [
   {
     key: 'cancel',
-    labelRe: /seller-related\s+cancellation\s+rate/i,
+    labelRe:
+      /seller-related\s+cancellation\s+rate|verkäuferbezogene\s+Stornierungsrate/i,
     pathRe: /\/performance\/delivery\/bad-cancel-rates/i,
     extract: extractCalculatedCancellationRate,
   },
   {
     key: 'delayed',
-    labelRe: /delayed\s+delivery\s+rate/i,
+    labelRe:
+      /delayed\s+delivery\s+rate|verspätete[rn]?\s+liefer|quote\s+verspäteter\s+lieferungen/i,
     pathRe: /\/performance\/delivery\/delivery-rates/i,
     extract: extractDelayedDeliveryRate,
   },
@@ -439,11 +444,14 @@ async function extractGlobalTotalSales(page) {
   });
 }
 
-/** Po přepnutí tabu ověř, že header tabulky patří dané sekci (ne starý DOM). */
+/** Po přepnutí tabu ověř, že header tabulky patří dané sekci (EN i DE UI). */
 const TAB_READY_LABEL = {
-  performance: /Seller-related cancellation rate|Ticket response rate|Tracking rate/i,
-  sales: /Total revenue|BuyBox share|Total orders/i,
-  assortment: /Total offers|Sellable offers|Out of stock|Missing product data/i,
+  performance:
+    /Seller-related cancellation rate|Ticket response rate|Tracking rate|verkäuferbezogene Stornierungsrate|Ticket-Antwortrate|Tracking-Rate/i,
+  sales:
+    /Total revenue|BuyBox share|Total orders|Gesamtumsatz|BuyBox-Anteil|Bestellungen insgesamt/i,
+  assortment:
+    /Total offers|Sellable offers|Out of stock|Missing product data|Angebote insgesamt|Verkaufsfähige Angebote|Nicht vorrätig|Fehlende Produktdaten/i,
 };
 
 /**
@@ -554,6 +562,15 @@ export async function loadDashboardAndExtractKpis(page, opts = {}) {
     // Modal často naskočí až po vykreslení tabulky
     await humanPause(150, 350);
     await dismissSwiftyModalIfPresent(page);
+
+    // Preferuj EN labely (DE UI láme TAB_READY / enrichment)
+    await ensurePortalEnglish(page);
+    await dismissSwiftyModalIfPresent(page);
+    await page
+      .locator('.health-dashboard__storefront')
+      .first()
+      .waitFor({ state: 'visible', timeout: KPI_WAIT_MS })
+      .catch(() => {});
 
     /** @type {Map<string, { storefront: string, metrics: object[] }>} */
     const bySf = new Map();

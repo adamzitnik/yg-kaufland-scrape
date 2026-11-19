@@ -74,7 +74,9 @@ export async function withHumanizedContext(browser, fn, options = {}) {
   const ctxOpts = {
     viewport: randomViewport(),
     userAgent: randomUserAgent(),
-    locale: 'de-DE',
+    // en-GB = Accept-Language EN (KPI labely). Timezone Berlin zůstává.
+    // de-DE dřív tlačilo Seller Portal do němčiny → nestabilní scrap labely.
+    locale: 'en-GB',
     timezoneId: 'Europe/Berlin',
     hasTouch: false,
     isMobile: false,
