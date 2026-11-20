@@ -1,4 +1,8 @@
-import { config, globalPerformanceDashboardUrl } from '../config.js';
+import {
+  config,
+  globalDashboardTabUrl,
+  globalPerformanceDashboardUrl,
+} from '../config.js';
 import { dismissOnetrustIfPresent } from '../lib/onetrust.js';
 import { dismissSwiftyModalIfPresent } from '../lib/swiftyModal.js';
 import { ensurePortalEnglish } from '../lib/portalLocale.js';
@@ -449,35 +453,36 @@ const TAB_READY_LABEL = {
   performance:
     /Seller-related cancellation rate|Ticket response rate|Tracking rate|verkäuferbezogene Stornierungsrate|Ticket-Antwortrate|Tracking-Rate/i,
   sales:
-    /Total revenue|BuyBox share|Total orders|Gesamtumsatz|BuyBox-Anteil|Bestellungen insgesamt/i,
+    /Total revenue|BuyBox share|Total orders|Total order units|Gesamtumsatz|BuyBox-Anteil|Bestellungen insgesamt/i,
   assortment:
     /Total offers|Sellable offers|Out of stock|Missing product data|Angebote insgesamt|Verkaufsfähige Angebote|Nicht vorrätig|Fehlende Produktdaten/i,
 };
 
 /**
- * Klikne na BI tab podle data-tab-id a počká na tabulku dané sekce.
+ * Přepne BI tab přes URL (?tab=…) — spolehlivější než klik (sidebar často interceptuje).
  * @param {import('playwright').Page} page
  * @param {string} tabId
  */
 async function activateDashboardTab(page, tabId) {
   await dismissSwiftyModalIfPresent(page);
 
-  const tab = page.locator(`[data-tab-id="${tabId}"]`).first();
-  await tab.waitFor({ state: 'visible', timeout: KPI_WAIT_MS });
+  let needNavigate = true;
+  try {
+    const u = new URL(page.url());
+    needNavigate = u.searchParams.get('tab') !== tabId;
+  } catch {
+    needNavigate = true;
+  }
 
-  const parentTab = tab.locator(
-    'xpath=ancestor::*[contains(@class,"bi-nav-tab")][1]',
-  );
-  const alreadyActive = await parentTab
-    .evaluate((el) =>
-      /\bbi-nav-tab--primary--active\b/.test(el.className || ''),
-    )
-    .catch(() => false);
-
-  if (!alreadyActive) {
-    await humanPause(120, 280);
+  if (needNavigate) {
+    await humanPause(80, 180);
+    await page.goto(globalDashboardTabUrl(tabId), {
+      waitUntil: 'domcontentloaded',
+      timeout: 60_000,
+    });
+    await humanPause(200, 450);
+    await dismissOnetrustIfPresent(page);
     await dismissSwiftyModalIfPresent(page);
-    await tab.click({ timeout: 15_000 });
   }
 
   await page

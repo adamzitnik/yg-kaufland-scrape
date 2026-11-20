@@ -113,17 +113,27 @@ export const config = {
 };
 
 /**
+ * Global dashboard URL pro konkrétní BI tab (performance|sales|assortment).
+ * Preferuj URL přepnutí místo kliku — expanded sidebar jinak interceptuje pointer events.
+ * @param {string} [tabId='performance']
+ */
+export function globalDashboardTabUrl(tabId = 'performance') {
+  const tab = String(tabId || 'performance').trim() || 'performance';
+  const base = config.cockpitDashboardBaseUrl.replace(/\/$/, '');
+  if (/\/dashboard\/global$/i.test(base)) {
+    return `${base}?tab=${encodeURIComponent(tab)}`;
+  }
+  if (/\/dashboard$/i.test(base)) {
+    return `${base}/global?tab=${encodeURIComponent(tab)}`;
+  }
+  return `${base}?tab=${encodeURIComponent(tab)}`;
+}
+
+/**
  * Global Performance dashboard (jeden scrape pro všechny storefronty).
  */
 export function globalPerformanceDashboardUrl() {
-  const base = config.cockpitDashboardBaseUrl.replace(/\/$/, '');
-  if (/\/dashboard\/global$/i.test(base)) {
-    return `${base}?tab=performance`;
-  }
-  if (/\/dashboard$/i.test(base)) {
-    return `${base}/global?tab=performance`;
-  }
-  return `${base}?tab=performance`;
+  return globalDashboardTabUrl('performance');
 }
 
 /**
